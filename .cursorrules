@@ -1,0 +1,40 @@
+# 清律健康后端 - 开发规范
+
+## 环境变量文件
+- **只允许读取和修改 `.env.example`**，它是模板文件，不含真实密钥
+- **绝对禁止读取 `.env`**，其中包含真实的数据库密码、JWT 密钥、API Key 等敏感信息
+- 如果需要查看或修改配置项的结构/默认值，只操作 `.env.example`
+- 如果用户要求修改 `.env` 的内容，提醒用户自行修改，不要直接操作
+
+## 技术栈
+- Python 3.13 + FastAPI + SQLAlchemy + MySQL
+- 密码加密：bcrypt
+- JWT：PyJWT
+- AI 分析：LangChain + DeepSeek/OpenAI 兼容 API
+
+## 代码规范
+- 使用 Python 3.10+ 语法（`X | None` 代替 `Optional[X]`）
+- 异步端点（`async def`）用于需要 `await` 的路由，同步端点（`def`）用于纯数据库操作
+- 路由函数名使用小写下划线，接口路径使用小写连字符
+- 错误响应使用 FastAPI 的 `HTTPException`，不自定义错误格式
+- 所有新增路由必须注册到 `app/main.py` 的 `app.include_router()`
+- 数据库模型变更后，同步更新 `init_db.sql` 或提供增量 SQL
+
+## 项目结构
+```
+app/
+├── main.py              # 入口
+├── config.py            # 配置（从 .env 读取）
+├── database.py          # 数据库连接
+├── models/              # SQLAlchemy 模型
+├── schemas/             # Pydantic 请求/响应模型
+├── routers/             # API 路由
+├── services/            # 业务逻辑
+└── middleware/           # 中间件（JWT 认证）
+```
+
+## 安全规则
+- 不在日志中打印密码、Token、API Key
+- 不在代码中硬编码任何密钥
+- 所有需要认证的接口使用 `get_current_user` 依赖注入
+- 用户数据严格按 `user_id` 隔离，禁止跨用户访问
