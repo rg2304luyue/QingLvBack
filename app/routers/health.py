@@ -7,6 +7,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.schemas.health import (
+    SleepRecordCreate, SleepRecordResponse, WeightGoalCreate, WeightGoalResponse,
     HealthRecordCreate, HealthRecordResponse, HealthRecordListResponse,
     DashboardResponse, TrendResponse, TrendPoint,
     WaterIntakeResponse, ReminderPlanCreate, ReminderPlanResponse,
@@ -80,7 +81,7 @@ def get_trend(
     valid = {"weight", "bmi", "body_fat", "systolic", "diastolic", "heart_rate", "blood_sugar"}
     if field not in valid:
         field = "weight"
-    unit_map = {"weight": "斤", "bmi": "", "body_fat": "%", "systolic": "mmHg", "diastolic": "mmHg", "heart_rate": "次/分", "blood_sugar": "mmol/L"}
+    unit_map = {"weight": "公斤", "bmi": "", "body_fat": "%", "systolic": "mmHg", "diastolic": "mmHg", "heart_rate": "次/分", "blood_sugar": "mmol/L"}
     points = health_service.get_trend(db, current_user.id, field, days)
     return TrendResponse(metric=field, unit=unit_map.get(field, ""), points=[TrendPoint(**p) for p in points])
 
@@ -109,6 +110,21 @@ def list_plans(current_user: User = Depends(get_current_user), db: Session = Dep
     return [ReminderPlanResponse.model_validate(p) for p in health_service.get_plans(db, current_user.id)]
 
 
+@router.put("/records/{record_id}", response_model=HealthRecordResponse)
+def update_record(record_id: int, body: HealthRecordCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    record = health_service.update_health_record(db, current_user.id, record_id, body.model_dump())
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return HealthRecordResponse.model_validate(record)
+
+
+@router.delete("/records/{record_id}")
+def delete_record(record_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not health_service.delete_health_record(db, current_user.id, record_id):
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"message": "已删除"}
+
+
 @router.post("/plans", response_model=ReminderPlanResponse)
 def create_plan(body: ReminderPlanCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return ReminderPlanResponse.model_validate(health_service.save_plan(db, current_user.id, body.model_dump()))
@@ -121,8 +137,54 @@ def remove_plan(plan_id: str, current_user: User = Depends(get_current_user), db
     return {"message": "已删除"}
 
 
+@router.put("/plans/{plan_id}", response_model=ReminderPlanResponse)
+
+def update_plan(plan_id: str, body: ReminderPlanCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    plan_data = body.model_dump()
+    plan_data["plan_id"] = plan_id
+    plan = health_service.save_plan(db, current_user.id, plan_data)
+    return ReminderPlanResponse.model_validate(plan)
+
 @router.post("/checkin/{plan_id}")
 def checkin_plan(plan_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     record = health_service.checkin(db, current_user.id, plan_id)
     streak = health_service.get_checkin_streak(db, current_user.id, plan_id)
     return {"plan_id": plan_id, "checkin_date": str(record.checkin_date), "streak": streak}
+
+
+# ── 体重目标 ──
+
+@router.get("/goal/weight", response_model=WeightGoalResponse)
+def get_weight_goal(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    wg = health_service.get_weight_goal(db, current_user.id)
+    if not wg:
+        return WeightGoalResponse(target_weight=0, target_date=None)
+    return WeightGoalResponse.model_validate(wg)
+
+
+@router.put("/goal/weight", response_model=WeightGoalResponse)
+def set_weight_goal(body: WeightGoalCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    wg = health_service.save_weight_goal(db, current_user.id, body.target_weight, body.target_date)
+    return WeightGoalResponse.model_validate(wg)
+
+
+# ── 睡眠 ──
+
+@router.post("/sleep", response_model=SleepRecordResponse)
+def add_sleep(body: SleepRecordCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    record = health_service.create_sleep_record(db, current_user.id, body.model_dump())
+    return SleepRecordResponse.model_validate(record)
+
+
+@router.get("/sleep/today", response_model=SleepRecordResponse)
+def get_today_sleep(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    record = health_service.get_today_sleep(db, current_user.id)
+    if not record:
+        return SleepRecordResponse(id=0, date=date.today(), sleep_hours=0, deep_sleep_hours=0, light_sleep_hours=0, bed_time="23:00", wake_time="07:00", quality_score=0)
+    return SleepRecordResponse.model_validate(record)
+
+
+@router.get("/sleep/history", response_model=list[SleepRecordResponse])
+def get_sleep_history(days: int = Query(7, ge=1, le=90), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    records = health_service.get_sleep_history(db, current_user.id, days)
+    return [SleepRecordResponse.model_validate(r) for r in records]

@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.health import HealthRecord, WaterIntake
+from app.models.health import HealthRecord, SleepRecord, WaterIntake
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -37,7 +37,7 @@ def generate_health_record(user_id: int, target_date: date | None = None) -> dic
 
     return {
         "timestamp": datetime(target_date.year, target_date.month, target_date.day, 8, 0, 0),
-        "weight": round(weight * 2, 1),           # 斤
+        "weight": round(weight, 1),               # 公斤
         "bmi": round(bmi, 1),
         "body_fat_percentage": round(body_fat, 1),
         "fat_weight": round(fat_weight, 1),
@@ -49,6 +49,27 @@ def generate_health_record(user_id: int, target_date: date | None = None) -> dic
         "hip_circumference": round(_clamp(95 + rng.gauss(0, 1), 88, 102), 1),
         "step_count": step_count,
         "sleep_hours": round(sleep_hours, 1),
+    }
+
+
+def generate_sleep_record(user_id: int, target_date: date | None = None) -> dict:
+    """生成一条睡眠记录"""
+    if target_date is None:
+        target_date = date.today()
+    rng = random.Random(target_date.toordinal() + 999)  # 不同于 health 的种子
+    total = _clamp(7 + rng.gauss(0, 0.8), 4, 10)
+    deep = _clamp(total * rng.uniform(0.25, 0.4), 0.5, total * 0.5)
+    light = round(total - deep, 1)
+    bed_h = rng.randint(22, 24) % 24
+    wake_h = rng.randint(6, 8)
+    return {
+        "date": target_date,
+        "sleep_hours": round(total, 1),
+        "deep_sleep_hours": round(deep, 1),
+        "light_sleep_hours": light,
+        "bed_time": f"{bed_h:02d}:{rng.choice(['00','30'])}",
+        "wake_time": f"{wake_h:02d}:{rng.choice(['00','30'])}",
+        "quality_score": rng.randint(55, 95),
     }
 
 
@@ -78,6 +99,12 @@ def backfill_data(db: Session, user_id: int, days: int = 30):
         if not water_existing:
             db.add(WaterIntake(user_id=user_id, **generate_water_intake(user_id, target)))
 
+        sleep_existing = db.query(SleepRecord).filter(
+            SleepRecord.user_id == user_id, SleepRecord.date == target
+        ).first()
+        if not sleep_existing:
+            db.add(SleepRecord(user_id=user_id, **generate_sleep_record(user_id, target)))
+
     db.commit()
 
 
@@ -98,6 +125,11 @@ def daily_job(db_factory):
                 WaterIntake.user_id == user.id, WaterIntake.date == today
             ).first():
                 db.add(WaterIntake(user_id=user.id, **generate_water_intake(user.id, today)))
+
+            if not db.query(SleepRecord).filter(
+                SleepRecord.user_id == user.id, SleepRecord.date == today
+            ).first():
+                db.add(SleepRecord(user_id=user.id, **generate_sleep_record(user.id, today)))
 
         db.commit()
     finally:

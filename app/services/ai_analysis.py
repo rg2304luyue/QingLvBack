@@ -50,7 +50,7 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
     elif bmi >= 28:
         scores["bmi"] = 10
         concerns.append(f"BMI {bmi:.1f} 属于肥胖范围")
-        suggestions.append("建议制定系统性减重计划，每周减 0.5-1 斤为宜")
+        suggestions.append("建议制定系统性减重计划，每周减 0.5-1 公斤为宜")
     elif bmi > 0:
         scores["bmi"] = 15
         concerns.append(f"BMI {bmi:.1f} 偏瘦")
@@ -124,17 +124,17 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
     else: level = "需关注"
 
     # 趋势
-    w_values = [r.weight / 2 for r in records if r.weight > 0]
+    w_values = [r.weight for r in records if r.weight > 0]
     w_dates = [r.timestamp.strftime("%m/%d") for r in records if r.weight > 0]
     weight_trend = "无数据"
     if len(w_values) >= 2:
         diff = w_values[-1] - w_values[0]
         if diff < -0.5:
-            weight_trend = f"体重下降 {abs(diff):.1f} kg（{w_dates[0]} → {w_dates[-1]}），趋势良好"
+            weight_trend = f"体重下降 {abs(diff):.1f} 公斤（{w_dates[0]} → {w_dates[-1]}），趋势良好"
         elif diff > 0.5:
-            weight_trend = f"体重上升 {diff:.1f} kg（{w_dates[0]} → {w_dates[-1]}），建议关注"
+            weight_trend = f"体重上升 {diff:.1f} 公斤（{w_dates[0]} → {w_dates[-1]}），建议关注"
         else:
-            weight_trend = f"体重稳定（{w_dates[0]} → {w_dates[-1]}），波动 < 0.5 kg"
+            weight_trend = f"体重稳定（{w_dates[0]} → {w_dates[-1]}），波动 < 0.5 公斤"
 
     return {
         "overall_score": overall, "score_level": level,
@@ -168,7 +168,7 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
     data_lines = ["最近30天健康数据："]
     for r in records[:30]:
         parts = [f"  {r.timestamp.strftime('%m/%d')}:"]
-        if r.weight > 0: parts.append(f"体重{r.weight}斤（{round(r.weight / 2, 1)}公斤）")
+        if r.weight > 0: parts.append(f"体重{r.weight}公斤")
         if r.bmi > 0: parts.append(f"BMI{r.bmi:.1f}")
         if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
         if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
@@ -232,7 +232,7 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
     records, _ = _get_recent_records(db, user_id, days=60)
     data_lines = []
     for r in records[:30]:
-        parts = [f"{r.timestamp.strftime('%m/%d')}: 体重{r.weight}斤"]
+        parts = [f"{r.timestamp.strftime('%m/%d')}: 体重{r.weight}公斤"]
         if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
         if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
         if r.blood_sugar > 0: parts.append(f"血糖{r.blood_sugar}")
@@ -289,7 +289,7 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
     health_lines = []
     for r in records:
         parts = [f"{r.timestamp.strftime('%m/%d')}:"]
-        if r.weight > 0: parts.append(f"体重{r.weight}斤（{round(r.weight / 2, 1)}公斤）")
+        if r.weight > 0: parts.append(f"体重{r.weight}公斤")
         if r.bmi > 0: parts.append(f"BMI{r.bmi:.1f}")
         if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
         if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
@@ -327,8 +327,8 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
 ## 用户收藏的健康知识
 {fav_context}
 
-## 重要单位说明
-- 体重单位为「斤」（1斤 = 0.5公斤）。例如：150斤 = 75公斤。回答时请同时标注斤和公斤，方便用户理解。
+## 单位说明
+- 体重单位为「公斤」
 - 血压单位为 mmHg（收缩压/舒张压）
 - 血糖单位为 mmol/L
 - 心率单位为 次/分

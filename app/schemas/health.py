@@ -3,6 +3,46 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
+# ── 体重目标 ──
+
+class WeightGoalCreate(BaseModel):
+    target_weight: float = 0
+    target_date: date | None = None
+
+
+class WeightGoalResponse(BaseModel):
+    target_weight: float
+    target_date: date | None
+
+    class Config:
+        from_attributes = True
+
+
+# ── 睡眠记录 ──
+
+class SleepRecordCreate(BaseModel):
+    sleep_hours: float = 0
+    deep_sleep_hours: float = 0
+    light_sleep_hours: float = 0
+    bed_time: str = "23:00"
+    wake_time: str = "07:00"
+    quality_score: int = 0
+
+
+class SleepRecordResponse(BaseModel):
+    id: int
+    date: date
+    sleep_hours: float
+    deep_sleep_hours: float
+    light_sleep_hours: float
+    bed_time: str
+    wake_time: str
+    quality_score: int
+
+    class Config:
+        from_attributes = True
+
+
 # ── 健康记录 ──
 
 class HealthRecordCreate(BaseModel):
