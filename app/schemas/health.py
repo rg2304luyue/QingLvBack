@@ -1,12 +1,12 @@
 """健康数据 Schema"""
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── 体重目标 ──
 
 class WeightGoalCreate(BaseModel):
-    target_weight: float = 0
+    target_weight: float = Field(0, ge=0, le=300)
     target_date: date | None = None
 
 
@@ -21,12 +21,18 @@ class WeightGoalResponse(BaseModel):
 # ── 睡眠记录 ──
 
 class SleepRecordCreate(BaseModel):
-    sleep_hours: float = 0
-    deep_sleep_hours: float = 0
-    light_sleep_hours: float = 0
+    sleep_hours: float = Field(0, ge=0, le=24)
+    deep_sleep_hours: float = Field(0, ge=0, le=24)
+    light_sleep_hours: float = Field(0, ge=0, le=24)
     bed_time: str = "23:00"
     wake_time: str = "07:00"
-    quality_score: int = 0
+    quality_score: int = Field(0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_sleep_hours(self):
+        if self.sleep_hours > 0 and (self.deep_sleep_hours + self.light_sleep_hours) > self.sleep_hours:
+            raise ValueError("深睡 + 浅睡不能超过总睡眠时长")
+        return self
 
 
 class SleepRecordResponse(BaseModel):
@@ -46,18 +52,18 @@ class SleepRecordResponse(BaseModel):
 # ── 健康记录 ──
 
 class HealthRecordCreate(BaseModel):
-    weight: float = 0
-    bmi: float = 0
-    body_fat_percentage: float = 0
-    fat_weight: float = 0
-    blood_sugar: float = 0
-    blood_pressure_systolic: int = 0
-    blood_pressure_diastolic: int = 0
-    heart_rate: int = 0
-    waist_circumference: float = 0
-    hip_circumference: float = 0
-    step_count: int = 0
-    sleep_hours: float = 0
+    weight: float = Field(0, ge=0, le=500)
+    bmi: float = Field(0, ge=0, le=100)
+    body_fat_percentage: float = Field(0, ge=0, le=100)
+    fat_weight: float = Field(0, ge=0, le=200)
+    blood_sugar: float = Field(0, ge=0, le=50)
+    blood_pressure_systolic: int = Field(0, ge=0, le=300)
+    blood_pressure_diastolic: int = Field(0, ge=0, le=200)
+    heart_rate: int = Field(0, ge=0, le=300)
+    waist_circumference: float = Field(0, ge=0, le=200)
+    hip_circumference: float = Field(0, ge=0, le=200)
+    step_count: int = Field(0, ge=0, le=100000)
+    sleep_hours: float = Field(0, ge=0, le=24)
     timestamp: datetime | None = None
 
 

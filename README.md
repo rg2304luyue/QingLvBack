@@ -5,11 +5,12 @@
 ## 技术栈
 
 - **Python**: 3.13+
-- **Web 框架**: FastAPI
+- **Web 框架**: FastAPI + Uvicorn
 - **数据库**: MySQL 8.0 + SQLAlchemy ORM
 - **认证**: JWT (PyJWT) + bcrypt
 - **AI**: LangChain + DeepSeek / OpenAI 兼容 API
 - **定时任务**: APScheduler
+- **数据校验**: Pydantic v2
 
 ## 功能模块
 
@@ -95,29 +96,26 @@ QingLvBack/
 ├── .env                       # 环境变量（不提交到 git）
 ├── .env.example               # 环境变量模板
 ├── .gitignore
-├── .cursorrules               # AI 编码规范
 ├── requirements.txt
-├── main.py                    # 启动脚本
-├── init_db.sql                # 数据库初始化（全量，含 v2/v3 新表）
-├── init_knowledge.sql         # 健康知识文章（30 篇）+ 收藏表
-├── init_chat.sql              # AI 对话会话 + 消息表
-├── init_v2.sql                # v2 迁移（饮水目标、体重目标、睡眠记录）
-├── init_v3.sql                # v3 迁移（体重单位注释斤→公斤）
+├── main.py                    # 启动脚本（uvicorn --reload）
+├── qinglv.sql                 # 全量数据库初始化脚本（含所有表 + 测试数据）
 └── app/
-    ├── main.py                # FastAPI 入口 + 生命周期
+    ├── main.py                # FastAPI 入口 + 生命周期 + CORS
     ├── config.py              # 配置（从 .env 读取）
-    ├── database.py            # SQLAlchemy 连接
+    ├── database.py            # SQLAlchemy 连接 + Session 依赖
     ├── models/                # ORM 模型
-    │   ├── user.py
+    │   ├── user.py            # User（身高/体重单位：cm / 公斤）
     │   ├── health.py          # HealthRecord, WaterIntake, ReminderPlan,
     │   │                      # CheckinRecord, WeightGoal, WaterGoal, SleepRecord
+    │   │                      # 含唯一约束：water(user+date), checkin(user+plan+date), sleep(user+date)
+    │   ├── knowledge.py       # KnowledgeArticle, KnowledgeFavorite
+    │   └── chat.py            # ChatSession（cascade delete）, ChatMessage
+    ├── schemas/               # Pydantic v2 请求/响应模型（含字段校验）
+    │   ├── user.py            # UserProfileUpdate: gender Literal, height/weight ge/le
+    │   ├── health.py          # HealthRecordCreate: 全字段 ge/le 约束
+    │   │                      # SleepRecordCreate: 深睡+浅睡 ≤ 总时长校验
     │   ├── knowledge.py
-    │   └── chat.py
-    ├── schemas/               # Pydantic 请求/响应模型
-    │   ├── user.py
-    │   ├── health.py
-    │   ├── knowledge.py
-    │   ├── analysis.py
+    │   ├── analysis.py        # AgentRequest.history: max_length=50
     │   └── chat.py
     ├── routers/               # API 路由
     │   ├── auth.py
@@ -126,12 +124,12 @@ QingLvBack/
     │   ├── analysis.py
     │   └── chat.py
     ├── services/              # 业务逻辑
-    │   ├── auth_service.py
-    │   ├── health_service.py
-    │   ├── ai_analysis.py
-    │   └── mock_generator.py
+    │   ├── auth_service.py    # JWT 生成/验证 + bcrypt
+    │   ├── health_service.py  # 原子 drink_water, 单次查询 checkin_streak
+    │   ├── ai_analysis.py     # 规则引擎 + LLM 双模式, 健康 Agent
+    │   └── mock_generator.py  # 模拟数据生成（健康、睡眠、饮水）
     └── middleware/
-        └── auth.py            # JWT 认证中间件
+        └── auth.py            # JWT Bearer 认证中间件
 ```
 
 ## 快速开始
@@ -146,14 +144,11 @@ pip install -r requirements.txt
 ### 2. 初始化数据库
 
 ```bash
-# 方式一：全新部署（推荐，init_db.sql 已包含全部表）
-mysql -u root -p < init_db.sql
-mysql -u root -p < init_knowledge.sql
-mysql -u root -p < init_chat.sql
+# 创建数据库
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS qinglv DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-# 方式二：已有数据库，执行增量迁移
-mysql -u root -p < init_v2.sql   # 新增：饮水目标、体重目标、睡眠记录
-mysql -u root -p < init_v3.sql   # 更新：体重单位注释（斤→公斤）
+# 导入全量 SQL（含所有表结构 + 30 篇健康知识 + 测试数据）
+mysql -u root -p qinglv < qinglv.sql
 ```
 
 ### 3. 配置环境变量
@@ -162,14 +157,14 @@ mysql -u root -p < init_v3.sql   # 更新：体重单位注释（斤→公斤）
 
 ```env
 MYSQL_PASSWORD=你的MySQL密码
-SECRET_KEY=随机字符串
-LLM_API_KEY=sk-your-deepseek-key    # 可选，不配则使用规则分析
+SECRET_KEY=随机字符串              # 生产环境务必修改
+LLM_API_KEY=sk-your-deepseek-key  # 可选，不配则使用规则引擎分析
 ```
 
 ### 4. 启动
 
 ```bash
-# 方式一：直接运行
+# 方式一：直接运行（带热重载）
 python main.py
 
 # 方式二：命令行
@@ -180,12 +175,13 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### 5. 默认账号
 
-首次启动自动创建 demo 用户：
+首次启动自动创建 demo 用户（需 `MOCK_DATA_ENABLED=true`）：
 
 - 用户名: `demo`
 - 密码: `demo123`
+- 体重: 68 公斤
 
-同时自动回填 30 天模拟健康数据。
+同时自动回填 30 天模拟健康数据（体重、血压、心率、血糖、步数、睡眠、饮水）。
 
 ## 模拟数据
 
@@ -193,6 +189,32 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - 每天凌晨 1:00 自动为所有用户生成当日健康数据（APScheduler）
 - 模拟数据有合理的随机波动和长期趋势（体重缓慢下降）
 - 自动生成睡眠记录（总时长、深睡、浅睡、质量评分）
+- 所有体重数据单位统一为 **公斤**
+
+## 数据完整性
+
+| 表 | 唯一约束 | 说明 |
+|---|---|---|
+| `water_intake` | `(user_id, date)` | 每人每天一条饮水记录 |
+| `checkin_records` | `(user_id, plan_id, checkin_date)` | 每人每天每个计划只能签到一次 |
+| `sleep_records` | `(user_id, date)` | 每人每天一条睡眠记录 |
+| `chat_messages` | 外键 `ON DELETE CASCADE` | 删除会话自动清理消息 |
+
+关键业务逻辑：
+- **饮水 +1**：使用 `UPDATE SET cup_count = cup_count + 1` 原子操作，避免并发竞争
+- **签到**：`IntegrityError` 捕获兜底，防止唯一约束冲突
+- **连续签到天数**：单次查询 + Python 端计算，避免 N+1 查询
+
+## 字段校验（Pydantic v2）
+
+| Schema | 校验规则 |
+|---|---|
+| `UserProfileUpdate.gender` | `Literal["男", "女"]` |
+| `UserProfileUpdate.height` | `50 ≤ x ≤ 250` |
+| `UserProfileUpdate.weight` | `10 ≤ x ≤ 300` |
+| `HealthRecordCreate.*` | 所有数值字段均有 `ge/le` 上下界 |
+| `SleepRecordCreate` | `深睡 + 浅睡 ≤ 总睡眠时长` |
+| `AgentRequest.history` | `max_length=50` |
 
 ## AI 功能
 

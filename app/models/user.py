@@ -13,6 +13,6 @@ class User(Base):
     gender = Column(String(4), default="")           # 男 / 女
     birthday = Column(Date, nullable=True)
     height = Column(Float, default=0)                 # cm
-    weight = Column(Float, default=0)                 # 斤
+    weight = Column(Float, default=0)                 # 公斤
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

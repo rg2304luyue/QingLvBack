@@ -114,7 +114,7 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
         ex_score += 7
     elif sleep_val > 0:
         suggestions.append(f"睡眠不足（{sleep_val:.1f}h），建议提前入睡，保证 7-8 小时")
-    scores["exercise"] = ex_score
+    scores["exercise"] = min(ex_score, 25)
 
     overall = sum(scores.values())
     if overall >= 90: level = "优秀"
@@ -123,18 +123,18 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
     elif overall >= 60: level = "偏差"
     else: level = "需关注"
 
-    # 趋势
+    # 趋势（records 按 timestamp.desc() 排序，[0] 是最新，[-1] 是最旧）
     w_values = [r.weight for r in records if r.weight > 0]
     w_dates = [r.timestamp.strftime("%m/%d") for r in records if r.weight > 0]
     weight_trend = "无数据"
     if len(w_values) >= 2:
-        diff = w_values[-1] - w_values[0]
+        diff = w_values[0] - w_values[-1]  # 最新 - 最旧
         if diff < -0.5:
-            weight_trend = f"体重下降 {abs(diff):.1f} 公斤（{w_dates[0]} → {w_dates[-1]}），趋势良好"
+            weight_trend = f"体重下降 {abs(diff):.1f} 公斤（{w_dates[-1]} → {w_dates[0]}），趋势良好"
         elif diff > 0.5:
-            weight_trend = f"体重上升 {diff:.1f} 公斤（{w_dates[0]} → {w_dates[-1]}），建议关注"
+            weight_trend = f"体重上升 {diff:.1f} 公斤（{w_dates[-1]} → {w_dates[0]}），建议关注"
         else:
-            weight_trend = f"体重稳定（{w_dates[0]} → {w_dates[-1]}），波动 < 0.5 公斤"
+            weight_trend = f"体重稳定（{w_dates[-1]} → {w_dates[0]}），波动 < 0.5 公斤"
 
     return {
         "overall_score": overall, "score_level": level,
@@ -200,6 +200,7 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
 指标为 0 表示没有数据。建议要具体可执行。"""
 
     try:
+        import re
         llm = ChatOpenAI(
             model=settings.llm_model,
             openai_api_key=settings.llm_api_key,
@@ -208,15 +209,13 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
         )
         response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=data_text)])
         text = response.content.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-            if text.endswith("```"):
-                text = text[:-3]
+        # 提取 JSON（兼容 ```json ... ``` 包裹）
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            text = match.group()
         return json.loads(text)
-    except Exception as e:
-        result = _rule_based_analysis(db, user_id)
-        result["summary"] += f"（AI 分析暂时不可用，规则引擎回退。错误：{e}）"
-        return result
+    except Exception:
+        return _rule_based_analysis(db, user_id)
 
 
 # ── 公共接口 ──
@@ -232,12 +231,14 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
     records, _ = _get_recent_records(db, user_id, days=60)
     data_lines = []
     for r in records[:30]:
-        parts = [f"{r.timestamp.strftime('%m/%d')}: 体重{r.weight}公斤"]
+        parts = [f"{r.timestamp.strftime('%m/%d')}: "]
+        if r.weight > 0: parts.append(f"体重{r.weight}公斤")
         if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
         if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
         if r.blood_sugar > 0: parts.append(f"血糖{r.blood_sugar}")
         if r.step_count > 0: parts.append(f"步数{r.step_count}")
-        data_lines.append("，".join(parts))
+        if len(parts) > 1:
+            data_lines.append("，".join(parts))
 
     context = "\n".join(data_lines[:20])
     system_prompt = (

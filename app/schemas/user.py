@@ -1,5 +1,6 @@
 """用户相关 Schema"""
 from datetime import date, datetime
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -15,10 +16,10 @@ class UserLogin(BaseModel):
 
 class UserProfileUpdate(BaseModel):
     nick_name: str | None = None
-    gender: str | None = None
+    gender: Literal["男", "女"] | None = None
     birthday: date | None = None
-    height: float | None = None
-    weight: float | None = None
+    height: float | None = Field(None, ge=50, le=250)
+    weight: float | None = Field(None, ge=10, le=300)
 
 
 class UserResponse(BaseModel):

@@ -1,7 +1,8 @@
 """健康数据服务"""
 from datetime import date, datetime, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.models.health import HealthRecord, WaterIntake, WaterGoal, ReminderPlan, CheckinRecord, WeightGoal, SleepRecord
 
@@ -97,12 +98,15 @@ def get_today_water(db: Session, user_id: int) -> WaterIntake:
 
 
 def drink_water(db: Session, user_id: int) -> WaterIntake:
-    record = get_today_water(db, user_id)
-    if record.cup_count < 20:
-        record.cup_count += 1
-        db.commit()
-        db.refresh(record)
-    return record
+    today = date.today()
+    # 原子 +1，避免并发竞争
+    db.execute(
+        update(WaterIntake)
+        .where(WaterIntake.user_id == user_id, WaterIntake.date == today, WaterIntake.cup_count < 20)
+        .values(cup_count=WaterIntake.cup_count + 1)
+    )
+    db.commit()
+    return get_today_water(db, user_id)
 
 
 def set_water_goal(db: Session, user_id: int, goal: int) -> WaterIntake:
@@ -166,22 +170,39 @@ def checkin(db: Session, user_id: int, plan_id: str) -> CheckinRecord:
         return existing
     record = CheckinRecord(user_id=user_id, plan_id=plan_id, checkin_date=today)
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    try:
+        db.commit()
+        db.refresh(record)
+    except IntegrityError:
+        db.rollback()
+        record = db.query(CheckinRecord).filter(
+            CheckinRecord.user_id == user_id,
+            CheckinRecord.plan_id == plan_id,
+            CheckinRecord.checkin_date == today,
+        ).first()
     return record
 
 
 def get_checkin_streak(db: Session, user_id: int, plan_id: str) -> int:
     today = date.today()
-    streak = 0
-    for i in range(365):
-        check_date = today - timedelta(days=i)
-        record = db.query(CheckinRecord).filter(
+    # 一次查询获取最近 365 天的所有打卡日期
+    start = today - timedelta(days=365)
+    dates = sorted(
+        db.query(CheckinRecord.checkin_date)
+        .filter(
             CheckinRecord.user_id == user_id,
             CheckinRecord.plan_id == plan_id,
-            CheckinRecord.checkin_date == check_date,
-        ).first()
-        if record:
+            CheckinRecord.checkin_date >= start,
+        )
+        .all(),
+        reverse=True,
+    )
+    dates = [d[0] for d in dates]
+    if not dates or dates[0] != today:
+        return 0
+    streak = 1
+    for i in range(1, len(dates)):
+        if dates[i - 1] - dates[i] == timedelta(days=1):
             streak += 1
         else:
             break

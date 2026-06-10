@@ -1,5 +1,5 @@
 """AI 分析 Schema"""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -26,7 +26,7 @@ class AnalysisReport(BaseModel):
 
 class AgentRequest(BaseModel):
     message: str
-    history: list[dict] = []  # 对话历史 [{role: "user"/"assistant", content: "..."}]
+    history: list[dict] = Field(default_factory=list, max_length=50)  # 对话历史，最多 50 条
 
 
 class AgentResponse(BaseModel):

@@ -1,4 +1,5 @@
 """清律健康 App 后端入口"""
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +9,8 @@ from app.config import settings
 from app.database import Base, engine, SessionLocal
 from app.routers import auth, health, analysis, knowledge, chat
 from app.services.mock_generator import backfill_data
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -24,7 +27,7 @@ async def lifespan(app: FastAPI):
             if not demo:
                 demo = User(
                     username="demo", password_hash=hash_password("demo123"),
-                    nick_name="健康用户", gender="男", height=172, weight=136,
+                    nick_name="健康用户", gender="男", height=172, weight=68,
                 )
                 db.add(demo)
                 db.commit()
@@ -37,8 +40,8 @@ async def lifespan(app: FastAPI):
             scheduler = BackgroundScheduler()
             scheduler.add_job(lambda: daily_job(SessionLocal), trigger="cron", hour=1, minute=0, id="daily_mock")
             scheduler.start()
-        except Exception:
-            pass  # 首次启动数据库可能还没就绪
+        except Exception as e:
+            logger.warning(f"启动初始化跳过（数据库可能未就绪）: {e}")
 
     yield
 
@@ -52,8 +55,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_credentials=False,  # 通配符来源不能同时开启 credentials
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth.router)

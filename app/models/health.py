@@ -1,7 +1,7 @@
 """健康数据相关模型"""
 from sqlalchemy import (
     Column, Integer, Float, String, Date, DateTime,
-    ForeignKey, Boolean, func,
+    ForeignKey, Boolean, UniqueConstraint, func,
 )
 from app.database import Base
 
@@ -31,6 +31,7 @@ class HealthRecord(Base):
 class WaterIntake(Base):
     """每日饮水记录"""
     __tablename__ = "water_intake"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_water_user_date"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -56,6 +57,7 @@ class ReminderPlan(Base):
 class CheckinRecord(Base):
     """打卡记录"""
     __tablename__ = "checkin_records"
+    __table_args__ = (UniqueConstraint("user_id", "plan_id", "checkin_date", name="uq_checkin_user_plan_date"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -88,6 +90,7 @@ class WaterGoal(Base):
 class SleepRecord(Base):
     """每日睡眠记录"""
     __tablename__ = "sleep_records"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_sleep_user_date"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
