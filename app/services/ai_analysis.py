@@ -270,13 +270,41 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
 
 def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> str:
     """
-    健康 Agent：查询用户身体数据 + 收藏文章，结合对话历史，用 LLM 回答
+    健康 Agent：查询用户身体数据 + 收藏文章 + 个人目标，结合对话历史，用 LLM 回答
     """
-    from app.models.health import HealthRecord
+    from app.models.health import HealthRecord, WeightGoal, WaterIntake
     from app.models.knowledge import KnowledgeArticle, KnowledgeFavorite
-
-    # 1. 查询最近 7 天健康数据
+    from app.models.user import User
     from datetime import datetime, timedelta
+
+    # 1. 查询用户个人信息
+    user = db.query(User).filter(User.id == user_id).first()
+    profile_lines = []
+    if user:
+        if user.nick_name: profile_lines.append(f"昵称：{user.nick_name}")
+        if user.gender: profile_lines.append(f"性别：{user.gender}")
+        if user.height > 0: profile_lines.append(f"身高：{user.height}cm")
+        if user.birthday:
+            age = int((datetime.now().date() - user.birthday).days / 365.25)
+            profile_lines.append(f"年龄：约{age}岁")
+    profile_context = "，".join(profile_lines) if profile_lines else "暂无个人信息"
+
+    # 2. 查询体重目标
+    weight_goal = db.query(WeightGoal).filter(WeightGoal.user_id == user_id).first()
+    goal_context = ""
+    if weight_goal and weight_goal.target_weight > 0:
+        goal_context = f"目标体重：{weight_goal.target_weight}公斤"
+        if weight_goal.target_date:
+            goal_context += f"，目标日期：{weight_goal.target_date.strftime('%Y-%m-%d')}"
+
+    # 3. 查询今日饮水
+    today = datetime.now().date()
+    water = db.query(WaterIntake).filter(WaterIntake.user_id == user_id, WaterIntake.date == today).first()
+    water_context = ""
+    if water:
+        water_context = f"今日饮水：{water.cup_count}/{water.daily_goal}杯"
+
+    # 4. 查询最近 7 天健康数据
     week_ago = datetime.now() - timedelta(days=7)
     records = (
         db.query(HealthRecord)
@@ -300,7 +328,7 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
             health_lines.append("，".join(parts))
     health_context = "\n".join(health_lines) if health_lines else "暂无近期健康数据"
 
-    # 2. 查询收藏的文章标题和标签
+    # 5. 查询收藏的文章标题和标签
     fav_article_ids = [
         r[0] for r in db.query(KnowledgeFavorite.article_id)
         .filter(KnowledgeFavorite.user_id == user_id)
@@ -318,8 +346,20 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
         fav_lines = [f"- [{a.tag}] {a.title}：{a.sub_title}" for a in articles]
         fav_context = "\n".join(fav_lines)
 
-    # 3. 拼接 System Prompt
+    # 6. 拼接 System Prompt
+    extra_context = ""
+    if goal_context:
+        extra_context += f"\n- {goal_context}"
+    if water_context:
+        extra_context += f"\n- {water_context}"
+
     system_prompt = f"""你是"清律健康顾问"，一个专业、温暖的 AI 健康助手。
+
+## 用户个人信息
+{profile_context}
+
+## 用户健康目标与状态
+{extra_context.strip() if extra_context else "暂未设定目标"}
 
 ## 用户近期健康数据（最近7天）
 {health_context}
@@ -334,12 +374,13 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
 - 心率单位为 次/分
 
 ## 回答原则
-1. 优先基于用户的健康数据给出个性化建议
-2. 如果用户的问题与其收藏文章相关，可以引用文章内容
-3. 回答要专业、有同理心、简明扼要
-4. 涉及严重健康风险时，提醒用户及时就医
-5. 不要编造用户的健康数据，只使用上面提供的数据
-6. 如果没有相关数据，坦诚告知并给出一般性建议"""
+1. 优先基于用户的健康数据和目标给出个性化建议
+2. 如果用户有体重目标，计算当前与目标的差距并给出进度评估
+3. 如果用户的问题与其收藏文章相关，可以引用文章内容
+4. 回答要专业、有同理心、简明扼要
+5. 涉及严重健康风险时，提醒用户及时就医
+6. 不要编造用户的健康数据，只使用上面提供的数据
+7. 如果没有相关数据，坦诚告知并给出一般性建议"""
 
     if not settings.llm_api_key:
         return (
