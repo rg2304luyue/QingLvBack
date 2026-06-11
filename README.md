@@ -228,3 +228,24 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - 健康报告由 LLM 生成自然语言分析
 - 健康 Agent 自动查询用户近 7 天数据 + 收藏文章 + 体重目标 + 饮水进度，拼接为上下文
 - 支持多轮对话，历史消息自动传入
+
+---
+
+## 👥 团队协作必看配置指南
+本拉取代码后，不同成员可能会因为本地环境差异（如 IP 地址、数据库账号密码、大模型 API Key 额度不同）遇到无法运行或连接超时的问题。请团队小伙伴在跑通项目前，**务必确认并修改**以下配置文件：
+
+### 1. 前端配置：局域网 IP
+- **文件路径**：`HealthManagement1.0.1/commons/common/src/main/ets/util/NetworkConfig.ets`
+- **需要修改**：将 `DEFAULT_URL` 中的 `100.79.96.224` 替换为您**自己电脑在局域网内的 IPv4 地址**，否则前台发出的请求无法连接到您本地启动的 FastAPI 服务端。
+- *(注：为避免代码冲突，该文件已加入 `.gitignore`)*
+
+### 2. 后端配置：环境变量文件 (.env)
+- **文件路径**：在 `HealthManagement-backened/QingLvBack/` 目录下创建一个名为 `.env` 的文件。
+- **需要修改**：
+  - 数据库账号密码：将 `MYSQL_USER` 和 `MYSQL_PASSWORD` 更改为您本地 MySQL 真实的用户名和密码。
+  - DeepSeek API Key：将 `LLM_API_KEY` 替换成您自己的 Key 以防额度受限或冲突。
+- *(注：为避免代码冲突，该文件已加入 `.gitignore`)*
+
+### 3. 后端配置：数据库初始化
+- **文件路径**：`HealthManagement-backened/QingLvBack/qinglv.sql`
+- **需要修改**：在启动后端服务前，请务必先通过 Navicat 等工具在本地数据库新建名为 `qinglv` 的库，并运行此 SQL 文件导入基础结构和测试数据，否则服务无法正常启动。
