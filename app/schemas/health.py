@@ -141,7 +141,7 @@ class ReminderPlanCreate(BaseModel):
     plan_id: str
     plan_type: int = 0
     name: str
-    time: str
+    time: str = Field(pattern=r"^\d{2}:\d{2}$")
     dosage: str = ""
     is_enabled: bool = True
 

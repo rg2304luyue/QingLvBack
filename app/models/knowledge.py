@@ -1,5 +1,5 @@
 """健康知识模型"""
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint, func
 from app.database import Base
 
 
@@ -17,6 +17,7 @@ class KnowledgeArticle(Base):
 
 class KnowledgeFavorite(Base):
     __tablename__ = "knowledge_favorites"
+    __table_args__ = (UniqueConstraint("user_id", "article_id", name="uq_fav_user_article"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)

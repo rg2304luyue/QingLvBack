@@ -1,10 +1,10 @@
 """AI 对话 Schema"""
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SessionCreate(BaseModel):
-    title: str = "新对话"
+    title: str = Field(default="新对话", max_length=128)
 
 
 class SessionResponse(BaseModel):
@@ -39,7 +39,7 @@ class MessageListResponse(BaseModel):
 
 
 class ChatSendRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=2000)
 
 
 class ChatSendResponse(BaseModel):

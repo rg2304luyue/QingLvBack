@@ -1,10 +1,13 @@
 """AI 健康分析服务：有 LLM → LangChain 分析，无 LLM → 规则引擎回退"""
+import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.health import HealthRecord
+
+logger = logging.getLogger(__name__)
 
 
 # ── 规则引擎（对标 App 的 HealthScoreService + HealthSuggestionService） ──
@@ -214,7 +217,8 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
         if match:
             text = match.group()
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"LLM 分析失败，回退规则引擎: {e}")
         return _rule_based_analysis(db, user_id)
 
 
@@ -266,7 +270,8 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
         response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=message)])
         return response.content.strip()
     except Exception as e:
-        return f"AI 服务暂时不可用：{e}"
+        logger.warning(f"chat_with_advisor LLM 调用失败: {e}")
+        return "AI 服务暂时不可用，请稍后再试。"
 
 
 def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> str:
@@ -418,4 +423,5 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
         response = llm.invoke(messages)
         return response.content.strip()
     except Exception as e:
-        return f"AI 服务暂时不可用：{e}"
+        logger.warning(f"agent_chat LLM 调用失败: {e}")
+        return "AI 服务暂时不可用，请稍后再试。"

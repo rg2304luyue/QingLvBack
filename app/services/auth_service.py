@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.models.user import User
@@ -41,8 +42,12 @@ def register_user(db: Session, username: str, password: str) -> tuple[User | Non
         nick_name=username,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        return None, "用户名已存在"
     return user, ""
 
 

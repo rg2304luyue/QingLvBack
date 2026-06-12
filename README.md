@@ -125,8 +125,8 @@ QingLvBack/
     │   └── chat.py
     ├── services/              # 业务逻辑
     │   ├── auth_service.py    # JWT 生成/验证 + bcrypt
-    │   ├── health_service.py  # 原子 drink_water, 单次查询 checkin_streak
-    │   ├── ai_analysis.py     # 规则引擎 + LLM 双模式, 健康 Agent
+    │   ├── health_service.py  # 原子 drink_water, 单次查询 checkin_streak, 并发安全
+    │   ├── ai_analysis.py     # 规则引擎 + LLM 双模式, 健康 Agent, 体重趋势修正
     │   └── mock_generator.py  # 模拟数据生成（健康、睡眠、饮水）
     └── middleware/
         └── auth.py            # JWT Bearer 认证中间件
@@ -215,6 +215,19 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | `HealthRecordCreate.*` | 所有数值字段均有 `ge/le` 上下界 |
 | `SleepRecordCreate` | `深睡 + 浅睡 ≤ 总睡眠时长` |
 | `AgentRequest.history` | `max_length=50` |
+| `ChatSendRequest.message` | `max_length=1000` |
+| `SessionCreate.title` | `max_length=128` |
+
+## 数据完整性（v2.3 更新）
+
+新增修复：
+- **drink_water 先确保记录存在**: 原子 UPDATE 前先调用 `get_today_water()` 创建当日记录，避免喝水丢失
+- **get_today_water / create_sleep_record 防并发**: 添加 `IntegrityError` 捕获，防止并发请求导致 500
+- **register_user 防并发**: 同名注册的 `IntegrityError` 返回 409 而非 500
+- **get_db 异常回滚**: 请求处理异常时自动 `db.rollback()`，防止脏状态残留
+- **KnowledgeFavorite 唯一约束**: 新增 `(user_id, article_id)` 唯一约束
+- **LLM 异常日志**: `_llm_analysis` 异常不再静默吞掉，改为 `logger.exception()` 记录
+- **错误信息脱敏**: AI 对话接口不再向客户端暴露内部异常详情（API 地址、密钥等）
 
 ## AI 功能
 
