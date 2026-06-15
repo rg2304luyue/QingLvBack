@@ -92,12 +92,18 @@ def get_today_water(db: Session, user_id: int) -> WaterIntake:
         daily_goal = goal_record.daily_goal if goal_record else 8
         record = WaterIntake(user_id=user_id, date=today, cup_count=0, daily_goal=daily_goal)
         db.add(record)
-        db.commit()
-        db.refresh(record)
+        try:
+            db.commit()
+            db.refresh(record)
+        except IntegrityError:
+            db.rollback()
+            record = db.query(WaterIntake).filter(WaterIntake.user_id == user_id, WaterIntake.date == today).first()
     return record
 
 
 def drink_water(db: Session, user_id: int) -> WaterIntake:
+    # 先确保今日记录存在
+    get_today_water(db, user_id)
     today = date.today()
     # 原子 +1，避免并发竞争
     db.execute(
@@ -241,8 +247,12 @@ def create_sleep_record(db: Session, user_id: int, data: dict) -> SleepRecord:
         return existing
     record = SleepRecord(user_id=user_id, date=today, **data)
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    try:
+        db.commit()
+        db.refresh(record)
+    except IntegrityError:
+        db.rollback()
+        record = db.query(SleepRecord).filter(SleepRecord.user_id == user_id, SleepRecord.date == today).first()
     return record
 
 

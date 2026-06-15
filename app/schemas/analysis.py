@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=2000)
 
 
 class ChatResponse(BaseModel):
@@ -25,7 +25,7 @@ class AnalysisReport(BaseModel):
 
 
 class AgentRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=2000)
     history: list[dict] = Field(default_factory=list, max_length=50)  # 对话历史，最多 50 条
 
 
