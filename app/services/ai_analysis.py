@@ -1,4 +1,9 @@
-"""AI 健康分析服务：有 LLM → LangChain 分析，无 LLM → 规则引擎回退"""
+"""
+AI 健康分析服务
+- LLM 可用 → LangGraph ReAct Agent（支持工具调用）
+- LLM 不可用 → 规则引擎回退
+"""
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -10,7 +15,9 @@ from app.models.health import HealthRecord
 logger = logging.getLogger(__name__)
 
 
-# ── 规则引擎（对标 App 的 HealthScoreService + HealthSuggestionService） ──
+# ═══════════════════════════════════════════════════════════════
+#  规则引擎（LLM 不可用时的回退方案）
+# ═══════════════════════════════════════════════════════════════
 
 def _get_recent_records(db: Session, user_id: int, days: int = 30):
     start = datetime.now() - timedelta(days=days)
@@ -126,12 +133,11 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
     elif overall >= 60: level = "偏差"
     else: level = "需关注"
 
-    # 趋势（records 按 timestamp.desc() 排序，[0] 是最新，[-1] 是最旧）
     w_values = [r.weight for r in records if r.weight > 0]
     w_dates = [r.timestamp.strftime("%m/%d") for r in records if r.weight > 0]
     weight_trend = "无数据"
     if len(w_values) >= 2:
-        diff = w_values[0] - w_values[-1]  # 最新 - 最旧
+        diff = w_values[0] - w_values[-1]
         if diff < -0.5:
             weight_trend = f"体重下降 {abs(diff):.1f} 公斤（{w_dates[-1]} → {w_dates[0]}），趋势良好"
         elif diff > 0.5:
@@ -157,10 +163,9 @@ def _rule_based_analysis(db: Session, user_id: int) -> dict:
     }
 
 
-# ── LLM 分析（LangChain + DeepSeek / OpenAI 兼容 API） ──
-
 def _llm_analysis(db: Session, user_id: int) -> dict:
-    import json
+    """LLM 生成健康评估报告（非 Agent 模式，直接调用 LLM）"""
+    import re
     from langchain_openai import ChatOpenAI
     from langchain.schema import HumanMessage, SystemMessage
 
@@ -203,7 +208,6 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
 指标为 0 表示没有数据。建议要具体可执行。"""
 
     try:
-        import re
         llm = ChatOpenAI(
             model=settings.llm_model,
             openai_api_key=settings.llm_api_key,
@@ -212,7 +216,6 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
         )
         response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=data_text)])
         text = response.content.strip()
-        # 提取 JSON（兼容 ```json ... ``` 包裹）
         match = re.search(r"\{[\s\S]*\}", text)
         if match:
             text = match.group()
@@ -222,19 +225,118 @@ def _llm_analysis(db: Session, user_id: int) -> dict:
         return _rule_based_analysis(db, user_id)
 
 
-# ── 公共接口 ──
+# ═══════════════════════════════════════════════════════════════
+#  LangGraph ReAct Agent（支持工具调用的智能对话）
+# ═══════════════════════════════════════════════════════════════
+
+def _run_agent_loop(db: Session, user_id: int, messages: list) -> str:
+    """
+    手动实现 ReAct Agent 循环
+    使用 LangChain 原生 tool calling，不依赖 langgraph.prebuilt
+    """
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
+
+    from app.services.agent_tools import create_tools
+
+    tools = create_tools(db, user_id)
+
+    # 创建 LLM 并绑定工具
+    llm = ChatOpenAI(
+        model=settings.llm_model,
+        openai_api_key=settings.llm_api_key,
+        openai_api_base=settings.llm_base_url,
+        temperature=0.7,
+        max_tokens=1500,
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    system_prompt = """你是"清律健康顾问"，一个专业、温暖的 AI 健康助手。
+
+## 你的能力
+你可以通过工具查询用户的健康数据，包括：
+- 个人信息（身高、体重、BMI）
+- 健康记录（体重、血压、心率、血糖、步数、睡眠）
+- 饮水数据、打卡记录、体重目标
+- 收藏的健康知识文章
+- 营养分析、运动计划生成、趋势预测、健康风险评估
+
+## 单位说明
+- 体重单位为「公斤」
+- 血压单位为 mmHg（收缩压/舒张压）
+- 血糖单位为 mmol/L
+- 心率单位为 次/分
+
+## 回答原则
+1. 当用户询问健康数据时，先用工具查询真实数据，再基于数据回答
+2. 当用户询问饮食/运动建议时，用工具获取身体数据后给出个性化建议
+3. 如果用户有体重目标，计算当前与目标的差距并给出进度评估
+4. 回答要专业、有同理心、简明扼要
+5. 涉及严重健康风险时，提醒用户及时就医
+6. 不要编造用户的健康数据，只使用工具返回的数据
+7. 如果没有相关数据，坦诚告知并给出一般性建议
+8. 使用 Markdown 格式（**加粗**、列表等）让回答更清晰"""
+
+    # 构建完整消息列表
+    all_messages = [SystemMessage(content=system_prompt)] + messages
+
+    # 构建工具名 → 函数的映射
+    tool_map = {t.name: t for t in tools}
+
+    # ReAct 循环（最多 5 轮工具调用）
+    for _ in range(6):
+        response = llm_with_tools.invoke(all_messages)
+
+        # 如果没有工具调用，直接返回回答
+        if not response.tool_calls:
+            return response.content.strip()
+
+        # 有工具调用：执行工具并把结果加入消息
+        all_messages.append(response)
+        for tc in response.tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc["args"]
+            tool_id = tc["id"]
+
+            logger.info(f"[Agent] 调用工具: {tool_name}({tool_args})")
+
+            # 执行工具
+            try:
+                tool_func = tool_map.get(tool_name)
+                if tool_func:
+                    # 工具接收单个字符串参数或无参数
+                    if tool_args:
+                        result = tool_func.invoke(tool_args)
+                    else:
+                        result = tool_func.invoke({})
+                else:
+                    result = f"未知工具: {tool_name}"
+            except Exception as e:
+                result = f"工具执行出错: {str(e)}"
+                logger.warning(f"[Agent] 工具 {tool_name} 执行失败: {e}")
+
+            logger.info(f"[Agent] 工具结果: {str(result)[:200]}")
+            all_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id))
+
+    # 超过最大轮次，返回最后的回答
+    return response.content.strip() if response else "抱歉，处理超时，请简化您的问题。"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  公共接口
+# ═══════════════════════════════════════════════════════════════
 
 def analyze_health(db: Session, user_id: int) -> dict:
+    """健康评估报告（规则引擎 / LLM）"""
     if settings.llm_api_key:
         return _llm_analysis(db, user_id)
     return _rule_based_analysis(db, user_id)
 
 
 def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
-    """健康顾问对话"""
+    """简单健康顾问对话（无工具调用，适合轻量场景）"""
     from app.models.user import User
 
-    # 查询用户个人信息
     user = db.query(User).filter(User.id == user_id).first()
     profile_parts = []
     if user:
@@ -292,153 +394,45 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
 
 def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> str:
     """
-    健康 Agent：查询用户身体数据 + 收藏文章 + 个人目标，结合对话历史，用 LLM 回答
+    健康 Agent 对话（LangGraph ReAct Agent + Tools）
+    支持工具调用：查询数据、营养分析、运动计划、趋势预测等
     """
-    from app.models.health import HealthRecord, WeightGoal, WaterIntake
-    from app.models.knowledge import KnowledgeArticle, KnowledgeFavorite
-    from app.models.user import User
-    from datetime import datetime, timedelta
-
-    # 1. 查询用户个人信息
-    user = db.query(User).filter(User.id == user_id).first()
-    profile_lines = []
-    if user:
-        if user.nick_name: profile_lines.append(f"昵称：{user.nick_name}")
-        if user.gender: profile_lines.append(f"性别：{user.gender}")
-        if user.height > 0: profile_lines.append(f"身高：{user.height}cm")
-        if user.weight > 0: profile_lines.append(f"体重：{user.weight}公斤")
-        if user.birthday:
-            age = int((datetime.now().date() - user.birthday).days / 365.25)
-            profile_lines.append(f"年龄：约{age}岁")
-    profile_context = "，".join(profile_lines) if profile_lines else "暂无个人信息"
-
-    # 2. 查询体重目标
-    weight_goal = db.query(WeightGoal).filter(WeightGoal.user_id == user_id).first()
-    goal_context = ""
-    if weight_goal and weight_goal.target_weight > 0:
-        goal_context = f"目标体重：{weight_goal.target_weight}公斤"
-        if weight_goal.target_date:
-            goal_context += f"，目标日期：{weight_goal.target_date.strftime('%Y-%m-%d')}"
-
-    # 3. 查询今日饮水
-    today = datetime.now().date()
-    water = db.query(WaterIntake).filter(WaterIntake.user_id == user_id, WaterIntake.date == today).first()
-    water_context = ""
-    if water:
-        water_context = f"今日饮水：{water.cup_count}/{water.daily_goal}杯"
-
-    # 4. 查询最近 7 天健康数据
-    week_ago = datetime.now() - timedelta(days=7)
-    records = (
-        db.query(HealthRecord)
-        .filter(HealthRecord.user_id == user_id, HealthRecord.timestamp >= week_ago)
-        .order_by(HealthRecord.timestamp.desc())
-        .limit(7)
-        .all()
-    )
-
-    health_lines = []
-    for r in records:
-        parts = [f"{r.timestamp.strftime('%m/%d')}:"]
-        if r.weight > 0: parts.append(f"体重{r.weight}公斤")
-        if r.bmi > 0: parts.append(f"BMI{r.bmi:.1f}")
-        if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
-        if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
-        if r.blood_sugar > 0: parts.append(f"血糖{r.blood_sugar}")
-        if r.step_count > 0: parts.append(f"步数{r.step_count}")
-        if r.sleep_hours > 0: parts.append(f"睡眠{r.sleep_hours:.1f}h")
-        if len(parts) > 1:
-            health_lines.append("，".join(parts))
-    health_context = "\n".join(health_lines) if health_lines else "暂无近期健康数据"
-
-    # 5. 查询收藏的文章标题和标签
-    fav_article_ids = [
-        r[0] for r in db.query(KnowledgeFavorite.article_id)
-        .filter(KnowledgeFavorite.user_id == user_id)
-        .all()
-    ]
-    fav_context = "暂无收藏文章"
-    if fav_article_ids:
-        articles = (
-            db.query(KnowledgeArticle)
-            .filter(KnowledgeArticle.id.in_(fav_article_ids))
-            .order_by(KnowledgeArticle.sort_order.asc())
-            .limit(10)
-            .all()
-        )
-        fav_lines = [f"- [{a.tag}] {a.title}：{a.sub_title}" for a in articles]
-        fav_context = "\n".join(fav_lines)
-
-    # 6. 拼接 System Prompt
-    extra_context = ""
-    if goal_context:
-        extra_context += f"\n- {goal_context}"
-    if water_context:
-        extra_context += f"\n- {water_context}"
-
-    system_prompt = f"""你是"清律健康顾问"，一个专业、温暖的 AI 健康助手。
-
-## 用户个人信息
-{profile_context}
-
-## 用户健康目标与状态
-{extra_context.strip() if extra_context else "暂未设定目标"}
-
-## 用户近期健康数据（最近7天）
-{health_context}
-
-## 用户收藏的健康知识
-{fav_context}
-
-## 单位说明
-- 体重单位为「公斤」
-- 血压单位为 mmHg（收缩压/舒张压）
-- 血糖单位为 mmol/L
-- 心率单位为 次/分
-
-## 回答原则
-1. 优先基于用户的健康数据和目标给出个性化建议
-2. 如果用户有体重目标，计算当前与目标的差距并给出进度评估
-3. 如果用户的问题与其收藏文章相关，可以引用文章内容
-4. 回答要专业、有同理心、简明扼要
-5. 涉及严重健康风险时，提醒用户及时就医
-6. 不要编造用户的健康数据，只使用上面提供的数据
-7. 如果没有相关数据，坦诚告知并给出一般性建议"""
-
     if not settings.llm_api_key:
+        # 无 LLM 时回退到简单模式
+        from app.models.user import User
+        user = db.query(User).filter(User.id == user_id).first()
+        records, _ = _get_recent_records(db, user_id, days=7)
+        health_lines = []
+        for r in records:
+            parts = [f"{r.timestamp.strftime('%m/%d')}: "]
+            if r.weight > 0: parts.append(f"体重{r.weight}公斤")
+            if r.blood_pressure_systolic > 0: parts.append(f"血压{r.blood_pressure_systolic}/{r.blood_pressure_diastolic}")
+            if r.heart_rate > 0: parts.append(f"心率{r.heart_rate}")
+            if r.blood_sugar > 0: parts.append(f"血糖{r.blood_sugar}")
+            if len(parts) > 1:
+                health_lines.append("，".join(parts))
+        health_context = "\n".join(health_lines) if health_lines else "暂无近期健康数据"
         return (
             "当前未配置 AI 模型（LLM_API_KEY 为空）。\n\n"
             f"你的近期健康数据：\n{health_context}\n\n"
-            f"你的收藏文章：\n{fav_context}\n\n"
             "如需 AI 对话功能，请在后端 .env 中配置 LLM_API_KEY。"
         )
 
-    # 4. 构建消息列表
-    from langchain_openai import ChatOpenAI
-    from langchain.schema import HumanMessage, SystemMessage, AIMessage
-
-    messages = [SystemMessage(content=system_prompt)]
-
-    # 加入对话历史（最多保留最近 10 轮）
-    for h in history[-20:]:
-        if h.get("role") == "user":
-            messages.append(HumanMessage(content=h.get("content", "")))
-        elif h.get("role") == "assistant":
-            messages.append(AIMessage(content=h.get("content", "")))
-
-    messages.append(HumanMessage(content=message))
-
-    # 5. 调用 LLM
     try:
-        llm = ChatOpenAI(
-            model=settings.llm_model,
-            openai_api_key=settings.llm_api_key,
-            openai_api_base=settings.llm_base_url,
-            temperature=0.7,
-            max_tokens=1000,
-        )
-        response = llm.invoke(messages)
-        return response.content.strip()
+        # 组装消息历史
+        from langchain_core.messages import HumanMessage, AIMessage
+        messages = []
+        for h in history[-20:]:
+            if h.get("role") == "user":
+                messages.append(HumanMessage(content=h.get("content", "")))
+            elif h.get("role") == "assistant":
+                messages.append(AIMessage(content=h.get("content", "")))
+        messages.append(HumanMessage(content=message))
+
+        # 运行 Agent 循环（自动执行工具调用）
+        return _run_agent_loop(db, user_id, messages)
+
     except Exception as e:
-        logger.warning(f"agent_chat LLM 调用失败: {e}")
-        return "AI 服务暂时不可用，请稍后再试。"
+        logger.exception(f"agent_chat 执行失败: {e}")
+        # 回退到简单模式
+        return chat_with_advisor(db, user_id, message)

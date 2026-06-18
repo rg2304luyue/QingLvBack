@@ -8,7 +8,7 @@
 - **Web 框架**: FastAPI + Uvicorn
 - **数据库**: MySQL 8.0 + SQLAlchemy ORM
 - **认证**: JWT (PyJWT) + bcrypt
-- **AI**: LangChain + DeepSeek / OpenAI 兼容 API
+- **AI**: LangChain + DeepSeek / OpenAI 兼容 API（ReAct Agent + Tools）
 - **定时任务**: APScheduler
 - **数据校验**: Pydantic v2
 
@@ -41,12 +41,13 @@
 
 - 健康报告生成（规则引擎 / LLM 双模式）
 - 健康顾问对话（基础版）
-- 健康 Agent（查询用户数据 + 收藏文章 + 体重目标 + 饮水进度 → LLM 个性化回答）
+- 健康 Agent（ReAct Agent + 10 个工具，自动查询数据并回答）
 
 ### AI 对话 (`/api/chat`)
 
 - 会话管理（新建 / 列表 / 删除）
 - 消息收发（保存对话历史 → Agent 回答）
+- **ReAct Agent 工具调用**：LLM 自动决定调用哪个工具，执行后继续推理
 
 ## API 一览
 
@@ -126,7 +127,8 @@ QingLvBack/
     ├── services/              # 业务逻辑
     │   ├── auth_service.py    # JWT 生成/验证 + bcrypt
     │   ├── health_service.py  # 原子 drink_water, 单次查询 checkin_streak, 并发安全
-    │   ├── ai_analysis.py     # 规则引擎 + LLM 双模式, 健康 Agent, 体重趋势修正
+    │   ├── ai_analysis.py     # ReAct Agent + 规则引擎回退
+    │   ├── agent_tools.py     # Agent 工具定义（10 个工具）
     │   └── mock_generator.py  # 模拟数据生成（健康、睡眠、饮水）
     └── middleware/
         └── auth.py            # JWT Bearer 认证中间件
@@ -239,8 +241,24 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 有 LLM API Key（推荐 DeepSeek）
 
 - 健康报告由 LLM 生成自然语言分析
-- 健康 Agent 自动查询用户近 7 天数据 + 收藏文章 + 体重目标 + 饮水进度，拼接为上下文
+- **ReAct Agent**：LLM 自动决定调用工具 → 执行 → 继续推理 → 生成回答
 - 支持多轮对话，历史消息自动传入
+- 三层回退：Agent 异常 → 简单对话模式 → 规则引擎
+
+### Agent 工具列表
+
+| 工具 | 功能 | 触发场景 |
+|------|------|---------|
+| `get_user_profile` | 查询用户个人信息 | 询问身高、体重、BMI |
+| `get_health_records` | 查询历史健康数据 | 询问血压、心率趋势 |
+| `get_today_water_intake` | 查询今日饮水 | 询问喝水情况 |
+| `get_weight_goal` | 查询体重目标 | 询问减重进度 |
+| `get_checkin_streak` | 查询打卡记录 | 询问坚持天数 |
+| `get_favorite_articles` | 查询收藏文章 | 询问收藏内容 |
+| `analyze_nutrition` | 食物营养分析 | "吃了xxx，帮我分析" |
+| `generate_exercise_plan` | 生成运动计划 | "帮我制定运动计划" |
+| `predict_health_trend` | 健康趋势预测 | "一个月后体重多少" |
+| `assess_health_risk` | 综合健康风险评估 | "我的健康风险" |
 
 ---
 
