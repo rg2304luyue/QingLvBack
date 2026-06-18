@@ -232,6 +232,20 @@ def analyze_health(db: Session, user_id: int) -> dict:
 
 def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
     """健康顾问对话"""
+    from app.models.user import User
+
+    # 查询用户个人信息
+    user = db.query(User).filter(User.id == user_id).first()
+    profile_parts = []
+    if user:
+        if user.gender: profile_parts.append(f"性别：{user.gender}")
+        if user.height > 0: profile_parts.append(f"身高：{user.height}cm")
+        if user.weight > 0: profile_parts.append(f"体重：{user.weight}公斤")
+        if user.birthday:
+            age = int((datetime.now().date() - user.birthday).days / 365.25)
+            profile_parts.append(f"年龄：约{age}岁")
+    profile_context = "，".join(profile_parts) if profile_parts else "暂无个人信息"
+
     records, _ = _get_recent_records(db, user_id, days=60)
     data_lines = []
     for r in records[:30]:
@@ -244,9 +258,11 @@ def chat_with_advisor(db: Session, user_id: int, message: str) -> str:
         if len(parts) > 1:
             data_lines.append("，".join(parts))
 
-    context = "\n".join(data_lines[:20])
+    health_context = "\n".join(data_lines[:20]) if data_lines else "暂无近期健康数据"
     system_prompt = (
-        f'你是专业健康顾问"清律健康顾问"。用户健康数据：\n{context}\n\n'
+        f'你是专业健康顾问"清律健康顾问"。\n'
+        f'用户个人信息：{profile_context}\n'
+        f'用户健康数据：\n{health_context}\n\n'
         "请基于数据回答用户问题。数据不足时如实告知。回答专业、有同理心、简明扼要。"
     )
 
@@ -290,6 +306,7 @@ def agent_chat(db: Session, user_id: int, message: str, history: list[dict]) -> 
         if user.nick_name: profile_lines.append(f"昵称：{user.nick_name}")
         if user.gender: profile_lines.append(f"性别：{user.gender}")
         if user.height > 0: profile_lines.append(f"身高：{user.height}cm")
+        if user.weight > 0: profile_lines.append(f"体重：{user.weight}公斤")
         if user.birthday:
             age = int((datetime.now().date() - user.birthday).days / 365.25)
             profile_lines.append(f"年龄：约{age}岁")
