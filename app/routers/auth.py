@@ -36,6 +36,14 @@ def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
 
 
+@router.post("/refresh", response_model=TokenResponse)
+def refresh_token(current_user: User = Depends(get_current_user)):
+    token = auth_service.create_access_token(current_user.id)
+    return TokenResponse(access_token=token, user=UserResponse.model_validate(current_user))
+
+
+
+
 @router.put("/me", response_model=UserResponse)
 def update_me(
     body: UserProfileUpdate,
